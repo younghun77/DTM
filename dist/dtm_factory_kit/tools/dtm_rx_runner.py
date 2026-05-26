@@ -43,7 +43,17 @@ import serial.tools.list_ports
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DUT_CONTROL = os.path.join(SCRIPT_DIR, "dut_control.py")
-RESULT_BASE = r"D:\factory"
+
+# Where to store CSV / logs.
+# Priority:
+#   1) $DTM_RX_RESULT_BASE  (explicit override)
+#   2) <current working directory>/results
+#      -> when launched via run_gui.bat, CWD == the launcher's directory,
+#         so the operator sees a "results" folder right next to run_gui.bat.
+RESULT_BASE = os.environ.get(
+    "DTM_RX_RESULT_BASE",
+    os.path.join(os.getcwd(), "results"),
+)
 
 # Import DUT helpers as a library so we can share one persistent SSH session
 # across all GUI actions instead of spawning a subprocess every time.
@@ -78,116 +88,304 @@ class DtmRxRunner:
         self.ssh = dut_control.SSHSession()
 
         self.root = tk.Tk()
-        self.root.title("DTM RX Runner (DUT + Dongle)")
-        self.root.geometry("760x600")
+        self.root.title("DTM RX Runner")
+        self.root.geometry("920x680")
+        self.root.minsize(820, 600)
+        # ----- Modern color palette ------------------------------------------
+        self.COLORS = {
+            "bg":        "#0f172a",  # app background (slate-900)
+            "panel":     "#1e293b",  # card background (slate-800)
+            "panel2":    "#334155",  # subtle inner block
+            "text":      "#e2e8f0",  # primary text
+            "muted":     "#94a3b8",  # secondary text
+            "accent":    "#38bdf8",  # primary accent (sky-400)
+            "ok":        "#22c55e",  # green-500
+            "warn":      "#f59e0b",  # amber-500
+            "err":       "#ef4444",  # red-500
+            "blue":      "#3b82f6",  # blue-500
+            "violet":    "#8b5cf6",  # violet-500
+            "border":    "#475569",
+        }
+        self.root.configure(bg=self.COLORS["bg"])
+        self._init_style()
         self._build_ui()
 
     # ----- UI ----------------------------------------------------------------
+    def _init_style(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        C = self.COLORS
+        style.configure(".", background=C["bg"], foreground=C["text"],
+                        fieldbackground=C["panel2"], bordercolor=C["border"])
+        style.configure("Card.TFrame", background=C["panel"])
+        style.configure("App.TFrame", background=C["bg"])
+        style.configure("Card.TLabel", background=C["panel"],
+                        foreground=C["text"], font=("Segoe UI", 10))
+        style.configure("CardTitle.TLabel", background=C["panel"],
+                        foreground=C["accent"],
+                        font=("Segoe UI Semibold", 11))
+        style.configure("Muted.TLabel", background=C["panel"],
+                        foreground=C["muted"], font=("Segoe UI", 9))
+        style.configure("Header.TLabel", background=C["bg"],
+                        foreground=C["text"],
+                        font=("Segoe UI Semibold", 16))
+        style.configure("SubHeader.TLabel", background=C["bg"],
+                        foreground=C["muted"], font=("Segoe UI", 9))
+        style.configure("TSpinbox", fieldbackground=C["panel2"],
+                        background=C["panel2"], foreground=C["text"],
+                        arrowcolor=C["text"])
+        style.configure("TCombobox", fieldbackground=C["panel2"],
+                        background=C["panel2"], foreground=C["text"],
+                        arrowcolor=C["text"])
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", C["panel2"])],
+                  foreground=[("readonly", C["text"])])
+
+    def _mk_btn(self, parent, text, command, *, bg, fg="white",
+                width=14, height=2, font=("Segoe UI Semibold", 10)) -> tk.Button:
+        b = tk.Button(parent, text=text, command=command,
+                      bg=bg, fg=fg, activebackground=bg,
+                      activeforeground=fg, relief="flat", bd=0,
+                      width=width, height=height, font=font,
+                      cursor="hand2")
+        return b
+
     def _build_ui(self) -> None:
-        top = tk.Frame(self.root)
-        top.pack(fill="x", padx=8, pady=4)
+        C = self.COLORS
+        # ----- Header --------------------------------------------------------
+        header = tk.Frame(self.root, bg=C["bg"])
+        header.pack(fill="x", padx=16, pady=(14, 6))
+        ttk.Label(header, text="DTM RX Runner",
+                  style="Header.TLabel").pack(side="left")
+        ttk.Label(header,
+                  text="  Bluetooth Direct Test Mode  •  Dongle + DUT",
+                  style="SubHeader.TLabel").pack(side="left", padx=(8, 0))
 
-        tk.Label(top, text="Dongle COM:").pack(side="left")
-        self.port_var = tk.StringVar()
-        self.port_cb = ttk.Combobox(top, textvariable=self.port_var, width=10)
-        self.port_cb.pack(side="left", padx=4)
-        tk.Button(top, text="Refresh", command=self.refresh_ports).pack(side="left", padx=2)
-        tk.Button(top, text="Open",    command=self.open_port).pack(side="left", padx=2)
+        self.status_var = tk.StringVar(value="● Dongle: searching…")
+        self.status_lbl = tk.Label(header, textvariable=self.status_var,
+                                   bg=C["bg"], fg=C["muted"],
+                                   font=("Segoe UI", 10))
+        self.status_lbl.pack(side="right")
 
-        tk.Label(top, text="   Channel:").pack(side="left")
+        # ----- Config card ---------------------------------------------------
+        cfg = ttk.Frame(self.root, style="Card.TFrame", padding=14)
+        cfg.pack(fill="x", padx=16, pady=6)
+        ttk.Label(cfg, text="TEST CONFIG", style="CardTitle.TLabel"
+                  ).grid(row=0, column=0, columnspan=8, sticky="w",
+                         pady=(0, 8))
+
+        ttk.Label(cfg, text="Channel", style="Card.TLabel"
+                  ).grid(row=1, column=0, sticky="w")
         self.ch_var = tk.IntVar(value=19)
-        tk.Spinbox(top, from_=0, to=39, textvariable=self.ch_var, width=4).pack(side="left")
+        ttk.Spinbox(cfg, from_=0, to=39, textvariable=self.ch_var,
+                    width=6).grid(row=1, column=1, padx=(6, 18), sticky="w")
 
-        tk.Label(top, text="   Length:").pack(side="left")
+        ttk.Label(cfg, text="Length", style="Card.TLabel"
+                  ).grid(row=1, column=2, sticky="w")
         self.len_var = tk.IntVar(value=37)
-        tk.Spinbox(top, from_=0, to=37, textvariable=self.len_var, width=4).pack(side="left")
+        ttk.Spinbox(cfg, from_=0, to=37, textvariable=self.len_var,
+                    width=6).grid(row=1, column=3, padx=(6, 18), sticky="w")
 
-        # Standalone (dongle-only) mode: skip ALL DUT / SSH / Ethernet calls.
-        # Rendered as an ON/OFF "switch" style button.
-        self.standalone_var = tk.BooleanVar(value=False)
-        tk.Label(top, text="   Mode:").pack(side="left", padx=(12, 0))
-        self.mode_switch = tk.Button(top, width=18, relief="raised", bd=2,
-                                     command=self._toggle_standalone)
-        self.mode_switch.pack(side="left", padx=2)
-        self._render_mode_switch()
-
-        btns = tk.Frame(self.root)
-        btns.pack(fill="x", padx=8, pady=6)
-        tk.Button(btns, text="START RX TEST", bg="#5dbf60", fg="white",
-                  font=("Arial", 11, "bold"), width=18, height=2,
-                  command=self.on_start).pack(side="left", padx=4)
-        tk.Button(btns, text="END RX TEST", bg="#e07070", fg="white",
-                  font=("Arial", 11, "bold"), width=18, height=2,
-                  command=self.on_end).pack(side="left", padx=4)
-        self.reboot_btn = tk.Button(btns, text="REBOOT DUT", bg="#d28a3a",
-                                    fg="white", font=("Arial", 10, "bold"),
-                                    width=12, height=2,
-                                    command=self.on_reboot)
-        self.reboot_btn.pack(side="left", padx=4)
-        tk.Button(btns, text="DTM Reset", width=10,
-                  command=self.on_reset).pack(side="left", padx=4)
-        tk.Button(btns, text="Open CSV folder", width=16,
-                  command=self._open_today_folder).pack(side="left", padx=4)
-
-        # Auto loop row
-        auto_row = tk.Frame(self.root)
-        auto_row.pack(fill="x", padx=8, pady=2)
-        tk.Label(auto_row, text="Iterations:").pack(side="left")
+        ttk.Label(cfg, text="Iterations", style="Card.TLabel"
+                  ).grid(row=1, column=4, sticky="w")
         self.iter_var = tk.IntVar(value=10)
-        tk.Spinbox(auto_row, from_=1, to=10000, textvariable=self.iter_var,
-                   width=6).pack(side="left", padx=2)
-        tk.Label(auto_row, text="RX duration (s):").pack(side="left", padx=(8, 0))
+        ttk.Spinbox(cfg, from_=1, to=10000, textvariable=self.iter_var,
+                    width=8).grid(row=1, column=5, padx=(6, 18), sticky="w")
+
+        ttk.Label(cfg, text="RX dur (s)", style="Card.TLabel"
+                  ).grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.dur_var = tk.IntVar(value=10)
-        tk.Spinbox(auto_row, from_=1, to=600, textvariable=self.dur_var,
-                   width=5).pack(side="left", padx=2)
-        tk.Label(auto_row, text="Cooldown (s):").pack(side="left", padx=(8, 0))
+        ttk.Spinbox(cfg, from_=1, to=600, textvariable=self.dur_var,
+                    width=6).grid(row=2, column=1, padx=(6, 18),
+                                  sticky="w", pady=(8, 0))
+
+        ttk.Label(cfg, text="Cooldown (s)", style="Card.TLabel"
+                  ).grid(row=2, column=2, sticky="w", pady=(8, 0))
         self.cool_var = tk.IntVar(value=30)
-        tk.Spinbox(auto_row, from_=0, to=600, textvariable=self.cool_var,
-                   width=5).pack(side="left", padx=2)
-        self.auto_btn = tk.Button(auto_row, text="AUTO RUN", bg="#3a7bd5",
-                                  fg="white", font=("Arial", 10, "bold"),
-                                  width=12, command=self.on_auto)
-        self.auto_btn.pack(side="left", padx=8)
-        self.auto_nr_btn = tk.Button(auto_row, text="AUTO RUN\n(no reboot)",
-                                     bg="#1f8f5d", fg="white",
-                                     font=("Arial", 9, "bold"),
-                                     width=14, command=self.on_auto_no_reboot)
-        self.auto_nr_btn.pack(side="left", padx=2)
-        self.stop_btn = tk.Button(auto_row, text="STOP", bg="#888", fg="white",
-                                  width=6, state="disabled",
-                                  command=self.on_stop)
-        self.stop_btn.pack(side="left", padx=2)
-        self.plot_btn = tk.Button(auto_row, text="Plot CSV", width=10,
-                                  command=self.on_plot)
-        self.plot_btn.pack(side="left", padx=8)
+        ttk.Spinbox(cfg, from_=0, to=600, textvariable=self.cool_var,
+                    width=6).grid(row=2, column=3, padx=(6, 18),
+                                  sticky="w", pady=(8, 0))
+
+        # Mode switch (DUT-LINK / STANDALONE)
+        self.standalone_var = tk.BooleanVar(value=False)
+        ttk.Label(cfg, text="Mode", style="Card.TLabel"
+                  ).grid(row=2, column=4, sticky="w", pady=(8, 0))
+        self.mode_switch = tk.Button(cfg, width=18, relief="flat", bd=0,
+                                     cursor="hand2",
+                                     font=("Segoe UI Semibold", 10),
+                                     command=self._toggle_standalone)
+        self.mode_switch.grid(row=2, column=5, columnspan=2, sticky="w",
+                              pady=(8, 0))
+
+        # ----- Manual-port fallback card (hidden by default) -----------------
+        self.port_card = ttk.Frame(self.root, style="Card.TFrame", padding=12)
+        # not packed yet; only shown when auto-detect fails
+        ttk.Label(self.port_card, text="DONGLE PORT (manual)",
+                  style="CardTitle.TLabel").pack(side="left")
+        ttk.Label(self.port_card,
+                  text="  auto-detect failed - pick the COM port:",
+                  style="Muted.TLabel").pack(side="left")
+        self.port_var = tk.StringVar()
+        self.port_cb = ttk.Combobox(self.port_card, textvariable=self.port_var,
+                                    width=14, state="readonly")
+        self.port_cb.pack(side="left", padx=8)
+        self._mk_btn(self.port_card, "Refresh",
+                     self.refresh_ports, bg=C["panel2"],
+                     width=10, height=1,
+                     font=("Segoe UI", 9)).pack(side="left", padx=2)
+        self._mk_btn(self.port_card, "Open",
+                     self.open_port, bg=C["accent"], fg="#0f172a",
+                     width=10, height=1,
+                     font=("Segoe UI Semibold", 9)).pack(side="left", padx=2)
+
+        # ----- Action card ---------------------------------------------------
+        act = ttk.Frame(self.root, style="Card.TFrame", padding=14)
+        act.pack(fill="x", padx=16, pady=6)
+        ttk.Label(act, text="ACTIONS", style="CardTitle.TLabel").pack(
+            anchor="w", pady=(0, 8))
+
+        primary = tk.Frame(act, bg=C["panel"])
+        primary.pack(fill="x")
+        self._mk_btn(primary, "▶  START RX", self.on_start,
+                     bg=C["ok"], width=16, height=2).pack(side="left", padx=4)
+        self._mk_btn(primary, "■  END RX", self.on_end,
+                     bg=C["err"], width=16, height=2).pack(side="left", padx=4)
+        self.auto_btn = self._mk_btn(primary, "⟳  AUTO RUN", self.on_auto,
+                                     bg=C["blue"], width=16, height=2)
+        self.auto_btn.pack(side="left", padx=4)
+        self.auto_nr_btn = self._mk_btn(primary, "⟳  AUTO (no reboot)",
+                                        self.on_auto_no_reboot,
+                                        bg=C["violet"], width=18, height=2)
+        self.auto_nr_btn.pack(side="left", padx=4)
+        self.stop_btn = self._mk_btn(primary, "STOP", self.on_stop,
+                                     bg="#64748b", width=8, height=2)
+        self.stop_btn.config(state="disabled")
+        self.stop_btn.pack(side="left", padx=4)
+
+        secondary = tk.Frame(act, bg=C["panel"])
+        secondary.pack(fill="x", pady=(10, 0))
+        self.reboot_btn = self._mk_btn(secondary, "REBOOT DUT",
+                                       self.on_reboot, bg=C["warn"],
+                                       width=14, height=1,
+                                       font=("Segoe UI Semibold", 9))
+        self.reboot_btn.pack(side="left", padx=4)
+        self._mk_btn(secondary, "DTM Reset", self.on_reset,
+                     bg=C["panel2"], width=12, height=1,
+                     font=("Segoe UI", 9)).pack(side="left", padx=4)
+        self._mk_btn(secondary, "Plot CSV", self.on_plot,
+                     bg=C["panel2"], width=12, height=1,
+                     font=("Segoe UI", 9)).pack(side="left", padx=4)
+        self._mk_btn(secondary, "Open results folder",
+                     self._open_today_folder,
+                     bg=C["panel2"], width=20, height=1,
+                     font=("Segoe UI", 9)).pack(side="left", padx=4)
+
+        # ----- Log card ------------------------------------------------------
+        logcard = ttk.Frame(self.root, style="Card.TFrame", padding=10)
+        logcard.pack(fill="both", expand=True, padx=16, pady=(6, 14))
+        ttk.Label(logcard, text="LOG", style="CardTitle.TLabel").pack(
+            anchor="w", pady=(0, 6))
+        self.log = scrolledtext.ScrolledText(
+            logcard, height=16, bg="#0b1220", fg=C["text"],
+            insertbackground=C["text"], relief="flat", bd=0,
+            font=("Cascadia Mono", 9))
+        self.log.pack(fill="both", expand=True)
+        # Color tags for log lines
+        self.log.tag_configure("ok",   foreground=C["ok"])
+        self.log.tag_configure("err",  foreground=C["err"])
+        self.log.tag_configure("warn", foreground=C["warn"])
+        self.log.tag_configure("info", foreground=C["accent"])
+        self.log.tag_configure("muted", foreground=C["muted"])
 
         self._auto_stop = threading.Event()
         self._auto_thread: threading.Thread | None = None
 
-        self.log = scrolledtext.ScrolledText(self.root, height=24)
-        self.log.pack(fill="both", expand=True, padx=8, pady=8)
-
-        self.refresh_ports()
-        # Apply initial mode state (DUT-linked by default).
+        self._render_mode_switch()
         self._on_mode_change()
+        # Try to auto-detect & open the dongle. If it fails, fall back to
+        # the manual picker card.
+        self.root.after(100, self._auto_open_dongle)
 
     def write(self, msg: str) -> None:
-        self.log.insert("end", msg + "\n")
+        # Pick a color tag based on the leading marker.
+        tag = None
+        s = msg.lstrip()
+        if s.startswith(("[OK]", "[RESULT]", "[CSV]")):
+            tag = "ok"
+        elif s.startswith(("[ERR]", "[FAIL]")):
+            tag = "err"
+        elif s.startswith(("[WARN]", "[HINT]")):
+            tag = "warn"
+        elif s.startswith(("[INFO]", "[MODE]", "[DUT]", "[AUTO]",
+                            "[REBOOT]", "[STANDALONE]")):
+            tag = "info"
+        elif s.startswith(("[TX-DTM]", "[RX-DTM]", "[SCAN]")):
+            tag = "muted"
+        if tag:
+            self.log.insert("end", msg + "\n", tag)
+        else:
+            self.log.insert("end", msg + "\n")
         self.log.see("end")
         self.root.update_idletasks()
 
     # ----- COM port management ----------------------------------------------
+    def _find_dongle_port(self) -> str | None:
+        """Look for the Nordic DTM USB CDC-ACM device."""
+        for p in serial.tools.list_ports.comports():
+            desc = (p.description or "") + " " + (p.manufacturer or "")
+            hwid = (p.hwid or "").upper()
+            if ("NORDIC" in desc.upper()
+                    or "DTM" in desc.upper()
+                    or "VID:PID=1915" in hwid
+                    or "1915:" in hwid):
+                return p.device
+        return None
+
+    def _auto_open_dongle(self) -> None:
+        """Auto-detect and open the dongle. Show manual picker only on failure."""
+        dev = self._find_dongle_port()
+        if dev:
+            try:
+                self.ser = serial.Serial(dev, 19200, bytesize=8, parity="N",
+                                         stopbits=1, timeout=2.0)
+                self.write(f"[OK] Auto-opened dongle on {dev} @ 19200 8N1")
+                self._send_cmd(CMD_RESET, label="initial-reset")
+                self._set_status(ok=True, text=f"● Dongle: {dev}")
+                # Hide the manual picker if it was shown earlier.
+                try:
+                    self.port_card.pack_forget()
+                except Exception:
+                    pass
+                return
+            except Exception as exc:
+                self.write(f"[WARN] Found {dev} but could not open it: {exc}")
+        # Fallback: reveal manual picker card.
+        self._set_status(ok=False, text="● Dongle: not found")
+        self.write("[WARN] Dongle auto-detect failed. "
+                   "Use the manual port picker that just appeared.")
+        try:
+            # Insert the manual card right under the header config card.
+            self.port_card.pack(fill="x", padx=16, pady=4, after=None)
+        except Exception:
+            self.port_card.pack(fill="x", padx=16, pady=4)
+        self.refresh_ports()
+
+    def _set_status(self, *, ok: bool, text: str) -> None:
+        self.status_var.set(text)
+        self.status_lbl.config(fg=self.COLORS["ok"] if ok
+                               else self.COLORS["err"])
+
     def refresh_ports(self) -> None:
         ports = list(serial.tools.list_ports.comports())
         self.port_cb["values"] = [p.device for p in ports]
-        # try to auto-select the Nordic DTM USB
-        for p in ports:
-            desc = (p.description or "") + " " + (p.manufacturer or "")
-            if "Nordic" in desc or "DTM" in desc or "1915" in (p.hwid or ""):
-                self.port_var.set(p.device)
-                self.write(f"[INFO] Auto-selected {p.device} ({p.description})")
-                return
-        if ports:
+        dev = self._find_dongle_port()
+        if dev:
+            self.port_var.set(dev)
+            self.write(f"[INFO] Auto-selected {dev}")
+        elif ports:
             self.port_var.set(ports[0].device)
 
     def open_port(self) -> None:
@@ -198,10 +396,15 @@ class DtmRxRunner:
                                      bytesize=8, parity="N", stopbits=1,
                                      timeout=2.0)
             self.write(f"[OK] Opened {self.port_var.get()} @ 19200 8N1")
-            # Send a Reset to align the dongle state machine.
             self._send_cmd(CMD_RESET, label="initial-reset")
+            self._set_status(ok=True, text=f"● Dongle: {self.port_var.get()}")
+            try:
+                self.port_card.pack_forget()
+            except Exception:
+                pass
         except Exception as exc:
             messagebox.showerror("Open failed", str(exc))
+            self._set_status(ok=False, text="● Dongle: open failed")
 
     # ----- DTM helpers -------------------------------------------------------
     def _send_cmd(self, cmd: int, freq: int = 0, length: int = 0, pkt: int = 0,
@@ -237,14 +440,15 @@ class DtmRxRunner:
         self._on_mode_change()
 
     def _render_mode_switch(self) -> None:
+        C = self.COLORS
         if self.is_standalone():
             self.mode_switch.config(
-                text="STANDALONE  [ON]",
-                bg="#1f8f5d", fg="white", activebackground="#1f8f5d")
+                text="● STANDALONE",
+                bg=C["violet"], fg="white", activebackground=C["violet"])
         else:
             self.mode_switch.config(
-                text="DUT-LINK  [OFF]",
-                bg="#cccccc", fg="black", activebackground="#bbbbbb")
+                text="● DUT-LINK",
+                bg=C["ok"], fg="white", activebackground=C["ok"])
 
     def _on_mode_change(self) -> None:
         if self.is_standalone():
@@ -263,23 +467,9 @@ class DtmRxRunner:
         # REBOOT DUT button: only meaningful with DUT link.
         if hasattr(self, "reboot_btn"):
             self.reboot_btn.config(state=("disabled" if standalone else "normal"))
-        # AUTO RUN / AUTO RUN (no reboot): hidden entirely in standalone.
-        for attr in ("auto_btn", "auto_nr_btn", "stop_btn"):
-            w = getattr(self, attr, None)
-            if w is None:
-                continue
-            if standalone:
-                try:
-                    w.pack_forget()
-                except Exception:
-                    pass
-            else:
-                # Re-pack in original order before the Plot CSV button.
-                try:
-                    w.pack(side="left", padx=(8 if attr == "auto_btn" else 2),
-                           before=self.plot_btn)
-                except Exception:
-                    pass
+        # AUTO RUN (with reboot) is meaningless without DUT link.
+        if hasattr(self, "auto_btn"):
+            self.auto_btn.config(state=("disabled" if standalone else "normal"))
 
     # ----- DUT helpers (persistent SSH session) ------------------------------
     def _dut_call(self, fn, *args, **kwargs) -> bool:
