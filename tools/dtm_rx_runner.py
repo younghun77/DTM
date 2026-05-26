@@ -34,6 +34,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
 from tkinter import messagebox, scrolledtext, ttk
@@ -836,11 +837,25 @@ class DtmRxRunner:
 
     def _scan_logs_quick(self) -> list[str]:
         """Lightweight per-iteration scan: download logs into a temp folder
-        and look for known failure patterns. Returns the list of findings."""
+        and look for known failure patterns. Returns the list of findings.
+
+        After bt_test_off / reboot the DUT's sshd can briefly reject auth,
+        so we give it a short settle delay; ``fetch_dut_logs`` will also
+        retry internally.
+        """
+        folder = self._logs_folder(tag="scan")
         try:
-            folder = self._logs_folder(tag="scan")
+            # Give sshd a moment to come back after bt_test_off.
+            time.sleep(1.5)
             saved = dut_control.fetch_dut_logs(self.ssh, folder)
-            findings = dut_control.analyze_dut_logs(saved) if saved else []
+            if not saved:
+                self.write("[SCAN] no logs downloaded - skipping analysis.")
+                try:
+                    os.rmdir(folder)
+                except Exception:
+                    pass
+                return []
+            findings = dut_control.analyze_dut_logs(saved)
             if not findings:
                 # Keep the workspace tidy when nothing interesting was found.
                 try:
@@ -851,7 +866,7 @@ class DtmRxRunner:
                     pass
             return findings
         except Exception as exc:
-            self.write(f"[SCAN] log scan failed: {exc}")
+            self.write(f"[SCAN] log scan failed (kept artifacts in {folder}): {exc}")
             return []
 
     def _save_csv(self, rx_count: int) -> None:

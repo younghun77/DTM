@@ -197,51 +197,81 @@ class SSHSession:
         tr = self._cli.get_transport()
         return bool(tr and tr.is_active())
 
-    def connect(self) -> None:
+    def connect(self, *, retries: int = 4, backoff: float = 2.0) -> None:
+        """Open an SSH connection. If the DUT temporarily refuses auth
+        (e.g. sshd just restarted after bt_test_off / reboot), retry a
+        few times with exponential-ish backoff before giving up.
+        """
         if self.is_alive():
             return
         last_exc: Exception | None = None
-        for user in self._candidate_users():
-            print(f"[SSH] Connecting to {self.host} as {user} using key {SSH_KEY_PATH}")
-            cli = paramiko.SSHClient()
-            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            try:
-                cli.connect(self.host, username=user,
-                            key_filename=SSH_KEY_PATH,
-                            look_for_keys=False, allow_agent=False,
-                            timeout=10)
-            except paramiko.AuthenticationException as exc:
-                cli.close()
-                print(f"[SSH] auth failed for user '{user}' -> trying next")
-                last_exc = exc
-                continue
-            except Exception as exc:
-                cli.close()
-                print(f"[SSH] connect error for '{user}': {exc}")
-                last_exc = exc
-                continue
-            self._cli = cli
-            self.user = user
-            print(f"[SSH] connected as {user}")
-            return
+        for attempt in range(1, retries + 1):
+            for user in self._candidate_users():
+                print(f"[SSH] Connecting to {self.host} as {user} "
+                      f"using key {SSH_KEY_PATH} (try {attempt}/{retries})")
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                try:
+                    cli.connect(self.host, username=user,
+                                key_filename=SSH_KEY_PATH,
+                                look_for_keys=False, allow_agent=False,
+                                timeout=10)
+                except paramiko.AuthenticationException as exc:
+                    cli.close()
+                    print(f"[SSH] auth failed for user '{user}' -> trying next")
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    cli.close()
+                    print(f"[SSH] connect error for '{user}': {exc}")
+                    last_exc = exc
+                    continue
+                self._cli = cli
+                self.user = user
+                print(f"[SSH] connected as {user}")
+                return
+            # All users failed for this attempt: wait then retry. DUT sshd
+            # often needs ~2-6s after bt_test_off/reboot before it accepts
+            # key auth again.
+            if attempt < retries:
+                delay = backoff * attempt
+                print(f"[SSH] all users failed (attempt {attempt}); "
+                      f"retrying in {delay:.1f}s ...")
+                time.sleep(delay)
         raise paramiko.AuthenticationException(
-            f"SSH connect failed for all users tried. Last error: {last_exc}")
+            f"SSH connect failed after {retries} attempts. Last error: {last_exc}")
 
-    def exec(self, cmd: str, timeout: float = 30.0) -> tuple[int, str, str]:
-        """Run a remote command and return (rc, stdout, stderr)."""
-        if not self.is_alive():
-            self.connect()
-        assert self._cli is not None
-        print(f"[SSH] Executing: {cmd}")
-        stdin, stdout, stderr = self._cli.exec_command(cmd, timeout=timeout)
-        out = stdout.read().decode(errors="replace")
-        err = stderr.read().decode(errors="replace")
-        rc = stdout.channel.recv_exit_status()
-        if out:
-            print(f"[SSH-STDOUT]\n{out.rstrip()}")
-        if err:
-            print(f"[SSH-STDERR]\n{err.rstrip()}")
-        return rc, out, err
+    def exec(self, cmd: str, timeout: float = 30.0,
+             retries: int = 2) -> tuple[int, str, str]:
+        """Run a remote command and return (rc, stdout, stderr).
+
+        Transparently reconnects + retries if the transport has died or
+        the DUT temporarily rejected auth.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, retries + 2):  # 1 initial + `retries` retries
+            try:
+                if not self.is_alive():
+                    self.connect()
+                assert self._cli is not None
+                print(f"[SSH] Executing: {cmd}")
+                stdin, stdout, stderr = self._cli.exec_command(cmd, timeout=timeout)
+                out = stdout.read().decode(errors="replace")
+                err = stderr.read().decode(errors="replace")
+                rc = stdout.channel.recv_exit_status()
+                if out:
+                    print(f"[SSH-STDOUT]\n{out.rstrip()}")
+                if err:
+                    print(f"[SSH-STDERR]\n{err.rstrip()}")
+                return rc, out, err
+            except Exception as exc:
+                last_exc = exc
+                print(f"[SSH] exec failed (attempt {attempt}): {exc}")
+                # Force-reset the session so the next attempt reconnects.
+                self.close()
+                if attempt <= retries:
+                    time.sleep(1.5 * attempt)
+        raise RuntimeError(f"SSH exec failed after retries: {last_exc}")
 
     def close(self) -> None:
         if self._cli is not None:
@@ -333,38 +363,50 @@ DUT_LOG_FILES = ("bt_test.log", "bt_bootstrap.log")
 def fetch_dut_logs(session: "SSHSession",
                    dest_dir: str,
                    files: tuple[str, ...] = DUT_LOG_FILES,
-                   remote_dir: str = DUT_LOG_DIR) -> list[str]:
+                   remote_dir: str = DUT_LOG_DIR,
+                   retries: int = 2) -> list[str]:
     """Download DUT log files via SFTP. Returns the list of saved local paths.
+
+    The SSH session is reconnected (with its own retry/backoff) if it has
+    died, so this function can be called right after bt_test_off / reboot
+    when sshd may briefly refuse auth.
 
     Failures for individual files are logged but do not raise, so the
     caller can still analyse whatever was retrieved.
     """
-    if not session.is_alive():
-        session.connect()
-    assert session._cli is not None
     os.makedirs(dest_dir, exist_ok=True)
-    saved: list[str] = []
-    try:
-        sftp = session._cli.open_sftp()
-    except Exception as exc:
-        print(f"[LOG] SFTP open failed: {exc}")
-        return saved
-    try:
-        for name in files:
-            remote = f"{remote_dir}/{name}"
-            local = os.path.join(dest_dir, name)
-            try:
-                sftp.get(remote, local)
-                print(f"[LOG] downloaded {remote} -> {local}")
-                saved.append(local)
-            except Exception as exc:
-                print(f"[LOG] could not download {remote}: {exc}")
-    finally:
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 2):
         try:
-            sftp.close()
-        except Exception:
-            pass
-    return saved
+            if not session.is_alive():
+                session.connect()
+            assert session._cli is not None
+            sftp = session._cli.open_sftp()
+            saved: list[str] = []
+            try:
+                for name in files:
+                    remote = f"{remote_dir}/{name}"
+                    local = os.path.join(dest_dir, name)
+                    try:
+                        sftp.get(remote, local)
+                        print(f"[LOG] downloaded {remote} -> {local}")
+                        saved.append(local)
+                    except Exception as exc:
+                        print(f"[LOG] could not download {remote}: {exc}")
+            finally:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+            return saved
+        except Exception as exc:
+            last_exc = exc
+            print(f"[LOG] fetch attempt {attempt} failed: {exc}")
+            session.close()
+            if attempt <= retries:
+                time.sleep(1.5 * attempt)
+    print(f"[LOG] giving up after {retries + 1} attempts: {last_exc}")
+    return []
 
 
 def dump_serial_driver(session: "SSHSession") -> str:
