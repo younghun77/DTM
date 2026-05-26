@@ -1,0 +1,7 @@
+default: direct_test_mode
+build_dir: C:/Users/USER/direct_test_mode/build_dongle
+domains:
+  - name: direct_test_mode
+    build_dir: C:/Users/USER/direct_test_mode/build_dongle/direct_test_mode
+flash_order:
+  - direct_test_mode

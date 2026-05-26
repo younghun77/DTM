@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode-complete.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-build.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-configure.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-download.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-install.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-patch.rule"
+		},
+		{
+			"file" : "C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"direct_test_mode"
+		],
+		"name" : "direct_test_mode"
+	}
+}

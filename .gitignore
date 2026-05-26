@@ -1,6 +1,9 @@
-# editors
-*.swp
-*~
-
-# build
-/build*/
+build/
+.west/
+__pycache__/
+*.pyc
+*.bak
+*.tmp
+dist/dtm_factory_kit/private_key.pem
+tools/private_key.pem
+tools/private_key.ppk

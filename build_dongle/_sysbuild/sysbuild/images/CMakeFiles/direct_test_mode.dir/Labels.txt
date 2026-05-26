@@ -1,0 +1,13 @@
+# Target labels
+ direct_test_mode
+# Source files and their labels
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode-complete.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-build.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-configure.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-download.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-install.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-mkdir.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-patch.rule
+C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-update.rule

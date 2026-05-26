@@ -1,0 +1,19 @@
+# ninja log v7
+32	526	8009675372015463	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-mkdir	abad80ebfb76bf9
+32	526	8009675372015463	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-mkdir	abad80ebfb76bf9
+526	983	8009675376678474	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-download	d8ddcc3f1dbb6e07
+526	983	8009675376678474	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-download	d8ddcc3f1dbb6e07
+993	1452	8009675381372792	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-update	47c269ee78e3557
+993	1452	8009675381372792	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-update	47c269ee78e3557
+1453	1908	8009675385947621	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-patch	dd34f47b3d3bd9a4
+1453	1908	8009675385947621	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-patch	dd34f47b3d3bd9a4
+1908	2374	8009675390568291	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-configure	c537e1728b823725
+1908	2374	8009675390568291	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-configure	c537e1728b823725
+28	21685	8009677585377178	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-build	d7419db7df52a770
+28	21685	8009677585377178	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-build	d7419db7df52a770
+21685	21958	8009677801942592	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-install	efe9febba7fd7647
+21685	21958	8009677801942592	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-install	efe9febba7fd7647
+21958	22574	8009677810243019	_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode-complete	18e07dd4b1613785
+21958	22574	8009677810243019	_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-done	18e07dd4b1613785
+21958	22574	8009677810243019	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/CMakeFiles/direct_test_mode-complete	18e07dd4b1613785
+21958	22574	8009677810243019	C:/Users/USER/direct_test_mode/build_dongle/_sysbuild/sysbuild/images/direct_test_mode-prefix/src/direct_test_mode-stamp/direct_test_mode-done	18e07dd4b1613785

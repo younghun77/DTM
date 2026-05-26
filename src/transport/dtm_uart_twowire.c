@@ -447,13 +447,15 @@ int dtm_tr_init(void)
 		return -EIO;
 	}
 
-#if defined(CONFIG_DTM_USB) && defined(CONFIG_SOC_NRF54H20_CPURAD)
+#if (defined(CONFIG_DTM_USB) && defined(CONFIG_SOC_NRF54H20_CPURAD)) || \
+	(defined(CONFIG_USBD_CDC_ACM_CLASS) && defined(CONFIG_SOC_NRF52840)) || \
+	(defined(CONFIG_USB_CDC_ACM) && defined(CONFIG_SOC_NRF52840))
 	/* Enable RX path for the USB CDC ACM.
 	 * uart_irq_rx_enable() -> cdc_acm_irq_rx_enable() -> cdc_acm_work_submit(rx_fifo_work)
 	 * It is not needed for non CDC ACM UARTs.
 	 */
 	uart_irq_rx_enable(dtm_uart);
-#endif /* defined(CONFIG_DTM_USB) && defined(CONFIG_SOC_NRF54H20_CPURAD) */
+#endif
 
 	err = dtm_init(NULL);
 	if (err) {

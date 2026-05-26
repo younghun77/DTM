@@ -1,0 +1,30 @@
+/*
+ * Copyright (c) 2026 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ *
+ * nRF52840 Dongle: route the DTM 2-wire UART over USB CDC ACM so the
+ * host PC (nRF Connect "Direct Test Mode" app) can talk to the dongle
+ * without an external UART-to-USB bridge.
+ */
+
+/ {
+	chosen {
+		ncs,dtm-uart = &cdc_acm_uart0;
+	};
+};
+
+/* Disable the physical UART selected by the default app.overlay. */
+&uart0 {
+	status = "disabled";
+};
+
+&zephyr_udc0 {
+	status = "okay";
+
+	cdc_acm_uart0: cdc_acm_uart0 {
+		status = "okay";
+		compatible = "zephyr,cdc-acm-uart";
+		current-speed = <19200>;
+	};
+};
