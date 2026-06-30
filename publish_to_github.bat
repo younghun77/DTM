@@ -41,13 +41,19 @@ REM Create/refresh .gitignore so we don't push huge build outputs
     echo *.bak
     echo *.tmp
     echo dist/dtm_factory_kit/private_key.pem
+    echo dist/dtm_factory_kit/tools/private_key.pem
     echo tools/private_key.pem
     echo tools/private_key.ppk
+    echo notify.ini
+    echo tools/notify.ini
+    echo dist/dtm_factory_kit/tools/notify.ini
+    REM dtm_factory_kit.zip bundles the DUT SSH private key - never publish it.
+    echo dist/dtm_factory_kit.zip
 )
 
-REM Stage source + distribution
+REM Stage source (the release zip is intentionally NOT pushed: it embeds the
+REM DUT SSH private key. Distribute the kit through a private channel instead.)
 git add -A
-git add -f dist\dtm_factory_kit.zip 2>nul
 
 git -c user.name="DTM Factory Kit" -c user.email="dtm@local" ^
     commit -m "Publish DTM Factory Kit (source + release zip)" || echo [INFO] nothing to commit

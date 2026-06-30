@@ -5,5 +5,10 @@ __pycache__/
 *.bak
 *.tmp
 dist/dtm_factory_kit/private_key.pem
+dist/dtm_factory_kit/tools/private_key.pem
 tools/private_key.pem
 tools/private_key.ppk
+notify.ini
+tools/notify.ini
+dist/dtm_factory_kit/tools/notify.ini
+dist/dtm_factory_kit.zip

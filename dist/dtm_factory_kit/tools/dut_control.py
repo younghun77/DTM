@@ -178,14 +178,24 @@ class SSHSession:
     Designed to be created once by the GUI and reused across multiple
     commands so the TCP/SSH handshake (and DUT-side login) does not have
     to happen for every test iteration.
+
+    ``host``, ``user`` and ``key_path`` can be overridden at construction
+    time so the same class works for BMW-style DUTs (defaults) and for
+    other OEM samples where IP / SSH credentials differ.
     """
 
-    def __init__(self, host: str = DUT_HOST):
+    def __init__(self, host: str = DUT_HOST,
+                 user: str | None = None,
+                 key_path: str | None = None):
         self.host = host
-        self.user: str | None = None
+        self.user: str | None = user
+        self._forced_user = user is not None
+        self.key_path = key_path or SSH_KEY_PATH
         self._cli: paramiko.SSHClient | None = None
 
     def _candidate_users(self) -> list[str]:
+        if self._forced_user and self.user:
+            return [self.user]
         env_user = os.environ.get("DUT_SSH_USER")
         if env_user:
             return [env_user]
@@ -197,81 +207,51 @@ class SSHSession:
         tr = self._cli.get_transport()
         return bool(tr and tr.is_active())
 
-    def connect(self, *, retries: int = 4, backoff: float = 2.0) -> None:
-        """Open an SSH connection. If the DUT temporarily refuses auth
-        (e.g. sshd just restarted after bt_test_off / reboot), retry a
-        few times with exponential-ish backoff before giving up.
-        """
+    def connect(self) -> None:
         if self.is_alive():
             return
         last_exc: Exception | None = None
-        for attempt in range(1, retries + 1):
-            for user in self._candidate_users():
-                print(f"[SSH] Connecting to {self.host} as {user} "
-                      f"using key {SSH_KEY_PATH} (try {attempt}/{retries})")
-                cli = paramiko.SSHClient()
-                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                try:
-                    cli.connect(self.host, username=user,
-                                key_filename=SSH_KEY_PATH,
-                                look_for_keys=False, allow_agent=False,
-                                timeout=10)
-                except paramiko.AuthenticationException as exc:
-                    cli.close()
-                    print(f"[SSH] auth failed for user '{user}' -> trying next")
-                    last_exc = exc
-                    continue
-                except Exception as exc:
-                    cli.close()
-                    print(f"[SSH] connect error for '{user}': {exc}")
-                    last_exc = exc
-                    continue
-                self._cli = cli
-                self.user = user
-                print(f"[SSH] connected as {user}")
-                return
-            # All users failed for this attempt: wait then retry. DUT sshd
-            # often needs ~2-6s after bt_test_off/reboot before it accepts
-            # key auth again.
-            if attempt < retries:
-                delay = backoff * attempt
-                print(f"[SSH] all users failed (attempt {attempt}); "
-                      f"retrying in {delay:.1f}s ...")
-                time.sleep(delay)
-        raise paramiko.AuthenticationException(
-            f"SSH connect failed after {retries} attempts. Last error: {last_exc}")
-
-    def exec(self, cmd: str, timeout: float = 30.0,
-             retries: int = 2) -> tuple[int, str, str]:
-        """Run a remote command and return (rc, stdout, stderr).
-
-        Transparently reconnects + retries if the transport has died or
-        the DUT temporarily rejected auth.
-        """
-        last_exc: Exception | None = None
-        for attempt in range(1, retries + 2):  # 1 initial + `retries` retries
+        for user in self._candidate_users():
+            print(f"[SSH] Connecting to {self.host} as {user} using key {self.key_path}")
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                if not self.is_alive():
-                    self.connect()
-                assert self._cli is not None
-                print(f"[SSH] Executing: {cmd}")
-                stdin, stdout, stderr = self._cli.exec_command(cmd, timeout=timeout)
-                out = stdout.read().decode(errors="replace")
-                err = stderr.read().decode(errors="replace")
-                rc = stdout.channel.recv_exit_status()
-                if out:
-                    print(f"[SSH-STDOUT]\n{out.rstrip()}")
-                if err:
-                    print(f"[SSH-STDERR]\n{err.rstrip()}")
-                return rc, out, err
-            except Exception as exc:
+                cli.connect(self.host, username=user,
+                            key_filename=self.key_path,
+                            look_for_keys=False, allow_agent=False,
+                            timeout=10)
+            except paramiko.AuthenticationException as exc:
+                cli.close()
+                print(f"[SSH] auth failed for user '{user}' -> trying next")
                 last_exc = exc
-                print(f"[SSH] exec failed (attempt {attempt}): {exc}")
-                # Force-reset the session so the next attempt reconnects.
-                self.close()
-                if attempt <= retries:
-                    time.sleep(1.5 * attempt)
-        raise RuntimeError(f"SSH exec failed after retries: {last_exc}")
+                continue
+            except Exception as exc:
+                cli.close()
+                print(f"[SSH] connect error for '{user}': {exc}")
+                last_exc = exc
+                continue
+            self._cli = cli
+            self.user = user
+            print(f"[SSH] connected as {user}")
+            return
+        raise paramiko.AuthenticationException(
+            f"SSH connect failed for all users tried. Last error: {last_exc}")
+
+    def exec(self, cmd: str, timeout: float = 30.0) -> tuple[int, str, str]:
+        """Run a remote command and return (rc, stdout, stderr)."""
+        if not self.is_alive():
+            self.connect()
+        assert self._cli is not None
+        print(f"[SSH] Executing: {cmd}")
+        stdin, stdout, stderr = self._cli.exec_command(cmd, timeout=timeout)
+        out = stdout.read().decode(errors="replace")
+        err = stderr.read().decode(errors="replace")
+        rc = stdout.channel.recv_exit_status()
+        if out:
+            print(f"[SSH-STDOUT]\n{out.rstrip()}")
+        if err:
+            print(f"[SSH-STDERR]\n{err.rstrip()}")
+        return rc, out, err
 
     def close(self) -> None:
         if self._cli is not None:
@@ -282,14 +262,55 @@ class SSHSession:
         self._cli = None
 
 
+# Default location of the BMW Telematics BT TX test scripts on the DUT.
+DEFAULT_SCRIPT_DIR = "/opt/factory/rootfs/usr/bin"
+
+
+def list_remote_scripts(session: "SSHSession",
+                        script_dir: str = DEFAULT_SCRIPT_DIR) -> list[str]:
+    """Return the list of executable ``*.sh`` files in ``script_dir`` on
+    the DUT. Used by the MANUAL-mode UI to let the user pick the correct
+    TX test script for that OEM image."""
+    if not session.is_alive():
+        session.connect()
+    # Falls back gracefully if `find` is missing.
+    cmd = (f"ls -1 {script_dir}/*.sh 2>/dev/null || "
+           f"find {script_dir} -maxdepth 1 -type f -name '*.sh' 2>/dev/null")
+    rc, out, _err = session.exec(cmd, timeout=10.0)
+    scripts: list[str] = []
+    for ln in out.splitlines():
+        name = ln.strip()
+        if not name:
+            continue
+        scripts.append(os.path.basename(name))
+    # Stable, de-duplicated order.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in scripts:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return sorted(uniq)
+
+
 def run_bt_tx_test(script: str = "bt_tx_test_39ch.sh",
-                   session: "SSHSession | None" = None) -> None:
+                   session: "SSHSession | None" = None,
+                   script_dir: str = DEFAULT_SCRIPT_DIR) -> None:
     """Run a BT TX test script via SSH (with private key authentication).
 
     If a persistent :class:`SSHSession` is supplied it is reused. Otherwise
     a one-shot SSH connection is opened (legacy CLI behaviour).
+
+    ``script_dir`` selects the remote directory the script lives in. The
+    default matches the BMW Telematics image; pass a different value for
+    other OEM samples.
+    ``script`` may already be an absolute path - in that case it is
+    executed as-is and ``script_dir`` is ignored.
     """
-    cmd = f"cd /opt/factory/rootfs/usr/bin && ./{script}"
+    if script.startswith("/"):
+        cmd = script
+    else:
+        cmd = f"cd {script_dir} && ./{script}"
     if session is not None:
         session.exec(cmd, timeout=60.0)
         print(f"[DONE] {script} dispatched via persistent SSH (user={session.user}).")
@@ -347,12 +368,14 @@ def rx_test_end() -> None:
     reboot_dut()
 
 
-def bt_test_off(session: "SSHSession | None" = None) -> None:
-    """Stop the running BT TX test on the DUT by executing bt_test_off.sh
-    in /opt/factory/rootfs/usr/bin via SSH. Used by 'End RX Test' so the
-    DUT stops transmitting without a full reboot."""
-    print("[TX-OFF] Stopping DUT TX via bt_test_off.sh ...")
-    run_bt_tx_test("bt_test_off.sh", session=session)
+def bt_test_off(session: "SSHSession | None" = None,
+                script: str = "bt_test_off.sh",
+                script_dir: str = DEFAULT_SCRIPT_DIR) -> None:
+    """Stop the running BT TX test on the DUT by executing ``script``
+    (default: ``bt_test_off.sh``) in ``script_dir`` via SSH.
+    Used by 'End RX Test' so the DUT stops transmitting without a full reboot."""
+    print(f"[TX-OFF] Stopping DUT TX via {script} ...")
+    run_bt_tx_test(script, session=session, script_dir=script_dir)
 
 
 # Remote DUT log files of interest.
@@ -364,49 +387,66 @@ def fetch_dut_logs(session: "SSHSession",
                    dest_dir: str,
                    files: tuple[str, ...] = DUT_LOG_FILES,
                    remote_dir: str = DUT_LOG_DIR,
-                   retries: int = 2) -> list[str]:
+                   extra_paths: "list[str] | tuple[str, ...] | None" = None
+                   ) -> list[str]:
     """Download DUT log files via SFTP. Returns the list of saved local paths.
-
-    The SSH session is reconnected (with its own retry/backoff) if it has
-    died, so this function can be called right after bt_test_off / reboot
-    when sshd may briefly refuse auth.
 
     Failures for individual files are logged but do not raise, so the
     caller can still analyse whatever was retrieved.
+
+    Parameters
+    ----------
+    files       : basenames (combined with ``remote_dir``) to download.
+                  Pass an empty tuple to skip the built-in defaults.
+    extra_paths : list of full remote paths supplied by the user
+                  (e.g. ``/var/log/messages`` or ``/data/log/dlt/dlt.log``).
+                  Each entry is downloaded as-is and saved to ``dest_dir``
+                  under its basename (with a numeric suffix on collision).
     """
+    if not session.is_alive():
+        session.connect()
+    assert session._cli is not None
     os.makedirs(dest_dir, exist_ok=True)
-    last_exc: Exception | None = None
-    for attempt in range(1, retries + 2):
-        try:
-            if not session.is_alive():
-                session.connect()
-            assert session._cli is not None
-            sftp = session._cli.open_sftp()
-            saved: list[str] = []
+    saved: list[str] = []
+    try:
+        sftp = session._cli.open_sftp()
+    except Exception as exc:
+        print(f"[LOG] SFTP open failed: {exc}")
+        return saved
+    try:
+        for name in files:
+            remote = f"{remote_dir}/{name}"
+            local = os.path.join(dest_dir, name)
             try:
-                for name in files:
-                    remote = f"{remote_dir}/{name}"
-                    local = os.path.join(dest_dir, name)
-                    try:
-                        sftp.get(remote, local)
-                        print(f"[LOG] downloaded {remote} -> {local}")
-                        saved.append(local)
-                    except Exception as exc:
-                        print(f"[LOG] could not download {remote}: {exc}")
-            finally:
-                try:
-                    sftp.close()
-                except Exception:
-                    pass
-            return saved
-        except Exception as exc:
-            last_exc = exc
-            print(f"[LOG] fetch attempt {attempt} failed: {exc}")
-            session.close()
-            if attempt <= retries:
-                time.sleep(1.5 * attempt)
-    print(f"[LOG] giving up after {retries + 1} attempts: {last_exc}")
-    return []
+                sftp.get(remote, local)
+                print(f"[LOG] downloaded {remote} -> {local}")
+                saved.append(local)
+            except Exception as exc:
+                print(f"[LOG] could not download {remote}: {exc}")
+        for remote in (extra_paths or ()):
+            remote = (remote or "").strip()
+            if not remote:
+                continue
+            base = os.path.basename(remote) or "log"
+            local = os.path.join(dest_dir, base)
+            # Avoid collisions with the default files.
+            n = 1
+            stem, ext = os.path.splitext(base)
+            while os.path.exists(local):
+                local = os.path.join(dest_dir, f"{stem}_{n}{ext}")
+                n += 1
+            try:
+                sftp.get(remote, local)
+                print(f"[LOG] downloaded {remote} -> {local}")
+                saved.append(local)
+            except Exception as exc:
+                print(f"[LOG] could not download {remote}: {exc}")
+    finally:
+        try:
+            sftp.close()
+        except Exception:
+            pass
+    return saved
 
 
 def dump_serial_driver(session: "SSHSession") -> str:
@@ -416,6 +456,41 @@ def dump_serial_driver(session: "SSHSession") -> str:
     if rc != 0:
         print(f"[SERIAL] cat /proc/tty/driver/serial returned rc={rc}")
     return out
+
+
+def dump_dmesg(session: "SSHSession") -> str:
+    """Run `dmesg` on the DUT and return its stdout.
+
+    The kernel ring buffer is useful when rx_count==0 because it surfaces
+    USB/UART resets, oops/panic traces and driver errors that never reach
+    the userspace log files."""
+    rc, out, err = session.exec("dmesg", timeout=15.0)
+    if rc != 0:
+        print(f"[DMESG] dmesg returned rc={rc}")
+        # Some images restrict dmesg to root via dmesg_restrict; surface stderr.
+        if err:
+            return out + ("\n" if out else "") + f"<stderr: {err.strip()}>"
+    return out
+
+
+def dump_os_version(session: "SSHSession") -> str:
+    """Return the ``VERSION=`` field from ``/etc/os-release`` on the DUT.
+
+    Parses the os-release file and extracts the quoted value of the
+    ``VERSION`` key. Returns an empty string when the field is absent."""
+    rc, out, err = session.exec("cat /etc/os-release", timeout=10.0)
+    if rc != 0:
+        print(f"[OSREL] cat /etc/os-release returned rc={rc}")
+        return ""
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("VERSION="):
+            value = line[len("VERSION="):].strip()
+            # Strip surrounding single or double quotes if present.
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value
+    return ""
 
 
 # Failure patterns we look for in the downloaded logs.
@@ -435,10 +510,29 @@ TEXT_FAIL_PATTERNS = (
 )
 
 
-def analyze_dut_logs(paths: list[str]) -> list[str]:
+def analyze_dut_logs(paths: list[str],
+                     extra_patterns: "list[str] | tuple[str, ...] | None" = None
+                     ) -> list[str]:
     """Scan downloaded DUT logs for known failure strings.
 
-    Returns a list of human-readable findings (path: pattern: matching line)."""
+    Returns a list of human-readable findings (path: pattern: matching line).
+
+    ``extra_patterns`` are user-supplied regular expressions (one per entry).
+    They are matched per line in addition to the built-in patterns. A single
+    entry may contain ``|`` to OR-combine alternatives, e.g. dlt/logcat
+    style: ``E/BT.*disconnect|ASSERT.*bt_host``.
+    """
+    import re
+    user_res: list[tuple[str, "re.Pattern[bytes]"]] = []
+    for raw in (extra_patterns or ()):
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        try:
+            user_res.append((raw, re.compile(raw.encode("utf-8", "replace"),
+                                             re.IGNORECASE)))
+        except re.error as exc:
+            print(f"[LOG] bad user pattern {raw!r}: {exc}")
     findings: list[str] = []
     for path in paths:
         try:
@@ -461,6 +555,18 @@ def analyze_dut_logs(paths: list[str]) -> list[str]:
                         f"{os.path.basename(path)}: '{pat.decode()}' -> {text}")
                     break  # one example per pattern is enough
 
+        # User-supplied regex patterns (dlt/logcat style, OR with '|').
+        for raw, rx in user_res:
+            for ln in lines:
+                if rx.search(ln):
+                    try:
+                        text = ln.decode(errors="replace").strip()
+                    except Exception:
+                        text = repr(ln)
+                    findings.append(
+                        f"{os.path.basename(path)}: [user] '{raw}' -> {text}")
+                    break
+
         # Firmware-crash byte pattern: report once with byte offset.
         for pat in CRASH_PATTERNS:
             idx = data.find(pat)
@@ -472,8 +578,23 @@ def analyze_dut_logs(paths: list[str]) -> list[str]:
     return findings
 
 
-def reboot_dut() -> None:
-    """2. Enable the control service first, then send the reboot frame.
+def _parse_hex_frame(hex_str: str) -> bytes:
+    """Convert a user-entered hex string (any spacing) into bytes.
+    Returns b'' for an empty/None input."""
+    if not hex_str:
+        return b""
+    cleaned = "".join(ch for ch in hex_str if ch.isalnum())
+    if not cleaned:
+        return b""
+    if len(cleaned) % 2 != 0:
+        raise ValueError(f"Hex frame has odd nibble count: {hex_str!r}")
+    return bytes.fromhex(cleaned)
+
+
+def reboot_dut(host: str = DUT_HOST, port: int = DUT_PORT,
+               reboot_frame: bytes | None = None,
+               service_enable_frame: bytes | None = None) -> None:
+    """Enable the control service (if any) and send the reboot frame.
 
        Sequence captured from production tool:
          TX SERVICE_ENABLE (Tool Start)  -> wait ACK (4B 55 ... 7E)
@@ -482,24 +603,43 @@ def reboot_dut() -> None:
        This function is tolerant to the DUT dropping the link mid-reboot:
        any TimeoutError / ConnectionError raised after the reboot frame
        has been written is treated as a successful reboot.
+
+       ``host`` / ``port`` override the default BMW target so the same
+       routine works against other OEM samples that expose the same
+       KU-style control protocol on a different Ethernet endpoint.
+
+       ``reboot_frame`` / ``service_enable_frame`` allow MANUAL mode (and
+       any OEM with a different control protocol) to supply their own
+       byte frames. Pass ``b''`` for ``service_enable_frame`` to skip
+       that step entirely. If ``reboot_frame`` is ``None`` the captured
+       BMW default ``REBOOT_FRAME`` is used; if it is ``b''`` the call
+       raises ``ValueError`` because there would be nothing to send.
     """
+    rb = REBOOT_FRAME if reboot_frame is None else reboot_frame
+    se = SERVICE_ENABLE_FRAME if service_enable_frame is None \
+        else service_enable_frame
+    if not rb:
+        raise ValueError("reboot_dut: reboot_frame is empty - nothing to send.")
     sent_reboot = False
     s = None
     try:
-        s = _connect()
+        s = _connect(host, port)
         try:
             _drain(s, "BANNER")
         except (socket.timeout, TimeoutError, OSError):
             pass
-        try:
-            ack1 = _send_and_wait(s, SERVICE_ENABLE_FRAME, label="SERVICE_ENABLE")
-            if not ack1:
-                print("[WARN] No ACK for SERVICE_ENABLE - proceeding anyway.")
-        except (socket.timeout, TimeoutError, OSError) as exc:
-            print(f"[WARN] SERVICE_ENABLE I/O error ({exc}); continuing.")
+        if se:
+            try:
+                ack1 = _send_and_wait(s, se, label="SERVICE_ENABLE")
+                if not ack1:
+                    print("[WARN] No ACK for SERVICE_ENABLE - proceeding anyway.")
+            except (socket.timeout, TimeoutError, OSError) as exc:
+                print(f"[WARN] SERVICE_ENABLE I/O error ({exc}); continuing.")
+        else:
+            print("[INFO] SERVICE_ENABLE skipped (empty frame).")
         try:
             sent_reboot = True
-            ack2 = _send_and_wait(s, REBOOT_FRAME, label="REBOOT")
+            ack2 = _send_and_wait(s, rb, label="REBOOT")
             if not ack2:
                 print("[WARN] No ACK for REBOOT - the DUT may already be rebooting.")
         except (socket.timeout, TimeoutError, OSError) as exc:

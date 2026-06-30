@@ -1,0 +1,13 @@
+# Teams notification config for dtm_rx_runner.
+#
+# 1) Rename this file to "notify.ini" (same folder as notify.py or the
+#    folder you launch run_gui.bat from), OR
+# 2) set the environment variable DTM_TEAMS_WEBHOOK instead.
+#
+# Get the URL from Teams: channel -> ... -> Connectors -> Incoming Webhook
+# (or a Power Automate "Workflows" HTTP-trigger URL).
+#
+# If no webhook is configured, notifications are simply skipped.
+
+[teams]
+webhook = <PASTE_YOUR_TEAMS_INCOMING_WEBHOOK_URL_HERE>
